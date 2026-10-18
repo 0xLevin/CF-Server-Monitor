@@ -36,6 +36,7 @@ Security is stricter by design: the Agent only reports metrics one way, does not
 - [Quick Deployment](#quick-deployment)
 - [First Use](#first-use)
 - [Agent Parameters and Security](#agent-parameters-and-security)
+- [Domain Monitoring](#domain-monitoring)
 - [Configuration](#configuration)
 - [Notifications and Alerts](#notifications-and-alerts)
 - [Security Notes](#security-notes)
@@ -70,6 +71,7 @@ Compared with traditional controller-style monitoring tools, CF-Server-Monitor i
 | Cross-platform Agent | Mainstream Linux, Alpine Linux, OpenWrt, Synology DSM, Feiniu fnOS, FreeBSD, macOS, Windows, plus Docker image deployment; Go Agent by default, Shell/PowerShell still available |
 | Realtime push | Durable Objects + WebSocket refresh the UI immediately after Agent reports |
 | Alerts | Offline alerts, recovery notices, expiration reminders, resource load rules |
+| Domain monitoring | RDAP registration expiry, live SSL certificate expiry, check status, and tiered reminders |
 | Multi-language | Built-in Chinese, English, and Latin American Spanish frontend switch; notifications in Chinese, English, or Spanish; Chinese and English documentation |
 | Multi-site | GitHub Pages static frontend and aggregation of multiple Worker APIs |
 | Widget | iOS Scriptable widget script for quick mobile status checks |
@@ -82,6 +84,8 @@ Compared with traditional controller-style monitoring tools, CF-Server-Monitor i
 ```mermaid
 flowchart LR
   Agent["Server Agent<br/>Go / Shell / PowerShell"] -->|"POST /update"| Worker["Cloudflare Worker"]
+  Probe["GitHub Actions TLS Probe"] -->|"authenticated results"| Worker
+  Worker -->|"RDAP lookup"| Registry["Domain registry"]
   Worker --> D1["Cloudflare D1<br/>servers / settings / history"]
   Worker <--> DO["Durable Object<br/>WebSocket broadcast"]
   Worker --> Assets["Vue Dashboard<br/>Admin Panel"]
@@ -247,6 +251,19 @@ Collect interval, report interval, ping nodes, network interface, traffic reset 
 docker rm -f cf-probe && docker volume rm cf-probe-data
 ```
 
+## Domain Monitoring
+
+The Domains tab in Admin stores a registered domain and the hostname whose public TLS certificate should be checked, for example `example.com` and `www.example.com`. Registration expiry comes from the registry's RDAP service. The Worker checks due records in hourly batches and refreshes successful results about once per day. Some registries do not publish an expiry date; the panel shows the error and any last known date instead of treating missing data as expired. RDAP expiry is not necessarily the registrar's billing renewal date.
+
+The recommended certificate checker is the `Domain TLS Probe` GitHub Actions workflow. It runs a Node probe every six hours and reports the certificate presented on port 443, its expiry, hostname match, and trust status. For Cloudflare-proxied hostnames this is the public edge certificate.
+
+1. Add a Worker secret named `DOMAIN_PROBE_SECRET` with at least 16 characters.
+2. Add the same value as a GitHub Actions secret in your fork.
+3. Set the Actions variable `DOMAIN_PROBE_URL` to the Worker's HTTPS origin, such as `https://status.example.com`.
+4. Run `Domain TLS Probe` manually once and check the certificate date in Admin.
+
+Without `DOMAIN_PROBE_SECRET`, the Worker attempts TLS inspection itself and displays any runtime or network error. With the external probe configured, Check now refreshes RDAP immediately; the scheduled probe updates TLS data. Expiry alerts use the existing notification channels and deduplicate the configured lead time and the 30, 14, 7, 3, 1, and 0-day thresholds.
+
 ## Configuration
 
 ### Worker Environment Variables
@@ -256,6 +273,7 @@ docker rm -f cf-probe && docker volume rm cf-probe-data
 | `API_SECRET` | Yes | Agent reporting secret and initial admin password |
 | `API_BASE` | No | Worker API base URLs for frontend requests, comma-separated; useful for multi-Worker aggregation or separated frontend/backend deployments |
 | `CORS_ALLOWED_ORIGINS` | No | Allowed API origins, comma-separated |
+| `DOMAIN_PROBE_SECRET` | No | Independent TLS probe reporting secret; use at least 32 random characters |
 
 ### GitHub Pages Static Frontend
 
@@ -437,10 +455,9 @@ Third-party themes only proxy `index.html` and `assets/` from the theme reposito
 
 ### Upgrade Worker
 
-If you deployed from a fork, sync the fork with upstream to trigger redeployment:
+This fork contains separate domain-monitoring code. Do not use GitHub's `Sync fork -> Update branch` to update the deployed `main` directly. The `Upstream Sync` workflow fetches upstream daily at UTC 00:00, tests and builds the merged code, then opens a review PR. Merging that PR triggers deployment. Conflicts create an issue instead of overwriting `main`.
 
-- Manual sync: click Sync fork -> Update branch in your GitHub repository.
-- Automatic sync: enable the `Upstream Sync` workflow. It checks upstream updates daily at UTC 00:00.
+In Settings -> Actions -> General, allow GitHub Actions to create pull requests. Protect `main` with PR review and the `Check changes` check. For manual updates, merge upstream into a temporary branch and open a PR.
 
 For one-click deployment, redeploy to the same project or migrate to a fork-based deployment.
 

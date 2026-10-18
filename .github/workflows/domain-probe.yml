@@ -1,0 +1,23 @@
+name: Domain TLS Probe
+
+on:
+  schedule:
+    - cron: '15 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-certificates:
+    if: ${{ github.event.repository.fork && vars.DOMAIN_PROBE_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/domain-tls-probe.js
+        env:
+          DOMAIN_PROBE_URL: ${{ vars.DOMAIN_PROBE_URL }}
+          DOMAIN_PROBE_SECRET: ${{ secrets.DOMAIN_PROBE_SECRET }}

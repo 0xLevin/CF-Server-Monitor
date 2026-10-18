@@ -36,6 +36,7 @@ CF-Server-Monitor 是一个部署在 Cloudflare Workers 上的服务器监控系
 - [快速部署](#快速部署)
 - [首次使用](#首次使用)
 - [Agent 参数与安全建议](#agent-参数与安全建议)
+- [域名监控](#域名监控)
 - [配置说明](#配置说明)
 - [通知与告警](#通知与告警)
 - [安全建议](#安全建议)
@@ -70,6 +71,7 @@ CF-Server-Monitor 是一个部署在 Cloudflare Workers 上的服务器监控系
 | 多系统 Agent | 主流 Linux、Alpine Linux、OpenWrt、群晖 DSM、飞牛 fnOS、FreeBSD、macOS、Windows，支持 Docker 镜像部署；默认 Go 版本，保留 Shell/PowerShell 版本 |
 | 实时推送      | Durable Objects + WebSocket，Agent 上报后前端即时刷新                                      |
 | 告警通知      | 离线告警、恢复通知、到期提醒、资源负载告警                                                            |
+| 域名监控      | RDAP 注册到期日、实际 SSL 证书到期日、检查状态与分级提醒                                                |
 | 多语言       | 前端内置中文、英文和西班牙语（拉美）切换；通知消息支持中文、英文和西班牙语；文档提供中文与英文入口              |
 | 多站点       | 支持 GitHub Pages 静态前台和多个 Worker API 聚合展示                                          |
 | 小组件       | 提供 iOS Scriptable 小组件脚本，适合移动端快速查看                                                |
@@ -82,6 +84,8 @@ CF-Server-Monitor 是一个部署在 Cloudflare Workers 上的服务器监控系
 ```mermaid
 flowchart LR
   Agent["Server Agent<br/>Go / Shell / PowerShell"] -->|"POST /update"| Worker["Cloudflare Worker"]
+  Probe["GitHub Actions TLS Probe"] -->|"authenticated results"| Worker
+  Worker -->|"RDAP lookup"| Registry["Domain registry"]
   Worker --> D1["Cloudflare D1<br/>servers / settings / history"]
   Worker <--> DO["Durable Object<br/>WebSocket broadcast"]
   Worker --> Assets["Vue Dashboard<br/>Admin Panel"]
@@ -245,6 +249,19 @@ docker run -d --name cf-probe --restart=unless-stopped --network=host \
 docker rm -f cf-probe && docker volume rm cf-probe-data
 ```
 
+## 域名监控
+
+后台“域名”页签可添加注册域名和要检查证书的主机名（例如 `example.com` 与 `www.example.com`）。注册到期日来自注册局 RDAP，Worker 每小时分批检查到期任务，成功后约每天更新一次。部分后缀不提供到期日，此时会显示检查错误和最近已知日期，不会把缺失日期当作过期。RDAP 日期也不等于注册商账单的续费日期。
+
+证书检查读取指定主机 443 端口实际返回的证书。经过 Cloudflare 代理时，检查到的是对外的边缘证书。建议使用仓库内的 `Domain TLS Probe` GitHub Actions 工作流，它每 6 小时运行一次 Node 探针，并将证书到期日、主机名匹配和信任链状态回传 Worker。配置步骤：
+
+1. 在 Worker 中设置不少于 16 字符的 Secret `DOMAIN_PROBE_SECRET`。
+2. 在 GitHub Fork 的 Actions Secrets 中设置**相同的** `DOMAIN_PROBE_SECRET`。
+3. 在 Actions Variables 中设置 `DOMAIN_PROBE_URL`，值为 Worker 的 HTTPS 根地址，例如 `https://status.example.com`。
+4. 手动运行一次 `Domain TLS Probe` 工作流，确认后台显示证书检查时间与到期日。
+
+没有配置 `DOMAIN_PROBE_SECRET` 时，Worker 会尝试直接检查证书；Cloudflare Workers 的 TLS 能力与本地网络环境可能限制此方式，失败会在域名列表中显示。设置独立探针密钥后，后台“立即检查”只立即刷新 RDAP，SSL 结果由探针定时更新。到期通知复用后台现有通知渠道，按设定的提前天数以及 30、14、7、3、1、0 天门槛去重发送。
+
 ## 配置说明
 
 ### Worker 环境变量
@@ -254,6 +271,7 @@ docker rm -f cf-probe && docker volume rm cf-probe-data
 | `API_SECRET`           | 是  | Agent 上报密钥；也是首次登录后台的默认密码 |
 | `API_BASE`             | 否  | 前端请求的 Worker API 地址，多个用英文逗号分隔；用于多 Worker 聚合或前后端分离 |
 | `CORS_ALLOWED_ORIGINS` | 否  | 允许跨域访问 API 的来源，多个用英文逗号分隔 |
+| `DOMAIN_PROBE_SECRET`  | 否  | 启用独立 SSL 探针的回传密钥，建议至少 32 个随机字符 |
 
 ### GitHub Pages 静态前台
 
@@ -440,10 +458,9 @@ smtp://<用户名>:<密码>@<host>:<port>?from=<发件人>&to=<收件人1,收件
 
 ### 升级 Worker
 
-如果通过 Fork 部署，同步上游仓库即可触发重新部署：
+此 Fork 包含独立域名监控代码，不要使用 GitHub 的 `Sync fork -> Update branch` 直接更新部署中的 `main`。启用 `Upstream Sync` 工作流后，它每天 UTC 00:00 拉取上游、运行测试与构建，并创建合并 PR；检查通过并审阅后合并 PR 才会触发部署。发生冲突时工作流会创建 Issue，不会覆盖 `main`。
 
-- 手动同步：GitHub 仓库页面点击 Sync fork -> Update branch。
-- 自动同步：启用 `Upstream Sync` 工作流，默认每天 UTC 00:00 检查上游更新。
+在仓库 Settings -> Actions -> General 中允许 GitHub Actions 创建 Pull Request，并为 `main` 设置 PR 与 `Check changes` 检查门槛。手动同步也应在临时分支合并上游后提交 PR。
 
 一键部署方式建议重新部署到同一个项目，或迁移到 Fork + GitHub / Cloudflare 自动部署模式。
 
@@ -589,6 +606,7 @@ CF-Server-Monitor/
 ├── scripts/                 # 构建脚本、GitHub Pages 构建、iOS 小组件
 ├── src/
 │   ├── database/            # D1 表结构、索引、迁移
+│   ├── domain-monitor/      # 域名注册与证书检查、独立 D1 表和 API
 │   ├── durable/             # Durable Object 实时广播
 │   ├── frontend/            # Vue 3 前台与管理后台
 │   ├── handlers/            # Worker 路由处理

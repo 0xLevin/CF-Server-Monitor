@@ -1,40 +1,87 @@
 name: Upstream Sync
 
-permissions:
-  contents: write
-
 on:
   schedule:
-    - cron: "0 0 * * *" # every day
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
 jobs:
-  sync_latest_from_upstream:
-    name: Sync latest commits from upstream repo
-    runs-on: ubuntu-latest
+  propose-upstream-update:
     if: ${{ github.event.repository.fork }}
-
+    runs-on: ubuntu-latest
     steps:
-      # Step 1: run a standard checkout action
-      - name: Checkout target repo
-        uses: actions/checkout@v3
-
-      # Step 2: run the sync action
-      - name: Sync upstream changes
-        id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+      - uses: actions/checkout@v4
         with:
-          upstream_sync_repo: huilang-me/CF-Server-Monitor
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # automatically generated, no need to set
+          fetch-depth: 0
+          persist-credentials: false
 
-          # Set test_mode true to run tests instead of the true action!!
-          test_mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: Sync check
-        if: failure()
+      - name: Fetch upstream
+        id: upstream
         run: |
-          echo "[Error] 由于上游仓库的 workflow 文件变更，导致 GitHub 自动暂停了本次自动更新，请前往仓库页面手动执行 Sync Fork 操作。"
-          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
-          exit 1
+          git remote add upstream https://github.com/huilang-me/CF-Server-Monitor.git
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
+            echo "branch=sync/upstream-$(git rev-parse --short=12 upstream/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare merge branch
+        id: merge
+        if: steps.upstream.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.upstream.outputs.branch }}
+        run: |
+          if gh pr list --base main --head "$BRANCH" --state open --json number --jq 'length' | grep -qx '1'; then
+            echo 'An upstream sync PR is already open.'
+            echo 'created=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git merge --abort
+            ISSUE=$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq '.[0].number // empty')
+            if [ -z "$ISSUE" ]; then
+              gh issue create --title 'Upstream sync conflict' --body "The upstream main branch at $(git rev-parse upstream/main) cannot merge into this fork's main automatically. Resolve the merge locally and open a PR."
+            fi
+            exit 1
+          fi
+          echo 'created=true' >> "$GITHUB_OUTPUT"
+
+      - name: Verify merged code
+        if: steps.merge.outputs.created == 'true'
+        run: |
+          npm ci
+          npm run test:all
+          npm run build:frontend
+
+      - name: Open sync PR
+        if: steps.merge.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.upstream.outputs.branch }}
+        run: |
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "Sync upstream main ($(git rev-parse --short upstream/main))" \
+            --body 'Merge upstream changes while preserving the domain monitor. Review the diff and CI result before merging. Merging this PR triggers deployment.'
+          gh workflow run check.yml --ref "$BRANCH"

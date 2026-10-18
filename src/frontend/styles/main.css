@@ -4978,6 +4978,17 @@ body.mikus-theme .mikus-stats-mascot-img {
         justify-content: space-between;
     }
 
+    .admin-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .admin-tabs .tab-btn {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
     .btn, .tab-btn{
         padding: 8px 5px;
         font-size: 11px;

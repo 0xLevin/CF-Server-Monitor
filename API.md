@@ -69,6 +69,7 @@
 - [7. 错误码速查表](#7-错误码速查表)
 - [8. 完整 cURL 示例](#8-完整-curl-示例)
 - [9. 版本与变更说明](#9-版本与变更说明)
+- [10. 域名监控](#10-域名监控)
 
 ***
 
@@ -2187,3 +2188,26 @@ curl -X POST https://status.example.com/admin/api \
 ***
 
 > 文档同步：与源码 `src/index.js`、`src/middleware/auth.js`、`src/handlers/{admin,dashboard,frontend,theme,update}.js`、`src/durable/MetricsBroadcaster.js`、`src/utils/{settings,errors,cors,csp,cache,metrics,common,serverBilling,version,latestReportCache,agentConfig}.js`、`src/database/{schema,updateDatabase}.js` 一一对应；后续修改任一文件时，请同步更新本文件。
+
+## 10. 域名监控
+
+域名管理接口要求管理员 JWT 或登录 Cookie；如果站点启用了全局 Turnstile，仍需通过正常的 Turnstile 验证。响应直接返回 JSON，不包裹在额外的 `data` 字段中。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/admin/domains` | 返回 `{ domains, tls_probe_mode }` |
+| `POST /api/admin/domains` | 新增，字段为 `domain`、`tls_host`、`label`、`reminder_days`、`enabled` |
+| `PUT /api/admin/domains/:id` | 编辑上述字段 |
+| `DELETE /api/admin/domains/:id` | 删除 |
+| `POST /api/admin/domains/:id/check` | 立即检查 RDAP；未配置独立探针时也尝试直接检查 TLS |
+
+`domain` 是注册域名，`tls_host` 必须是该域名或其子域名，证书检查固定连接 443 端口。`reminder_days` 为 1 到 90 的整数。日期字段为 Unix 毫秒；`registration_error` 和 `tls_error` 保存最近一次错误，已有日期不会因检查失败被覆盖。
+
+配置 `DOMAIN_PROBE_SECRET` 后，下面两个接口使用独立的 `Authorization: Bearer <DOMAIN_PROBE_SECRET>`；它不等于管理员 JWT 或 `API_SECRET`。探针工作流每 6 小时调用一次。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/domain-probe/jobs?after=<cursor>` | 按 ID 分页返回启用中的 `{ id, tls_host }`，每页最多 100 条 |
+| `POST /api/domain-probe/results` | 提交 `{ "results": [{ "id", "tls_host", "result": { "expiresAt", "notBefore", "authorized", "hostnameValid", "validationError", "issuer", "fingerprint" } }] }`，单次最多 20 条；失败可用 `{ "error": "..." }` |
+
+Worker 只接受 ID 与当前 TLS 主机名同时匹配的结果。注册到期日从 RDAP 获取，证书到期日来自目标站点实际返回的证书；Cloudflare 代理后的主机名对应边缘证书。

@@ -76,7 +76,7 @@
       </div>
 
       <div class="main-panel">
-        <div class="tabs">
+        <div class="tabs admin-tabs">
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'servers' }"
@@ -87,6 +87,11 @@
             :class="{ active: activeTab === 'settings' }"
             @click="activeTab = 'settings'"
           >{{ trans.settings }}</button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'domains' }"
+            @click="activeTab = 'domains'"
+          >{{ domainTabLabel }}</button>
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'database' }"
@@ -131,6 +136,8 @@
           @edit="openEditModal"
           @delete="openDeleteModal"
         />
+
+        <DomainMonitorPanel :active-tab="activeTab" :selected-api-base="selectedApiBase" />
 
         <SettingsPanel
           ref="settingsPanelRef"
@@ -580,6 +587,7 @@ import AdminLogin from './components/AdminLogin.vue'
 import ServerTable from './components/ServerTable.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import DatabasePanel from './components/DatabasePanel.vue'
+import DomainMonitorPanel from './components/DomainMonitorPanel.vue'
 import ThemeStorePanel from './components/ThemeStorePanel.vue'
 import DonationPanel from './components/DonationPanel.vue'
 import EditServerModal from './components/EditServerModal.vue'
@@ -589,7 +597,7 @@ import CopyCommandModal from './components/CopyCommandModal.vue'
 import { adminApi, login, logout as apiLogout, upgradeDatabase, clearHistory, fetchConfig } from '../../utils/api'
 import { hasMultipleApiBases, getApiBases } from '../../utils/config.js'
 import { copyTextToClipboard } from '../../utils/clipboard.js'
-import { t, useTranslation } from '../../utils/i18n'
+import { t, useTranslation, currentLang } from '../../utils/i18n'
 import { PING_NODE_FIELDS, validatePingNode } from '../../utils/pingNode.js'
 import { normalizeDisplayMode, resolveDisplayMode } from '../../utils/displayMode.js'
 import { applyMikusThemeOptions } from '../../utils/themeOptions.js'
@@ -599,6 +607,7 @@ import { useTurnstile } from './composables/useTurnstile'
 import { detectBillingCycle, detectCurrencySymbol, normalizeBillingCycle, normalizeCurrency, normalizePrice, renewExpireDateIfNeeded } from '../../utils/server.js'
 
 const trans = useTranslation()
+const domainTabLabel = computed(() => ({ zh: '域名', en: 'Domains', es: 'Dominios' })[currentLang.value] || 'Domains')
 const route = useRoute()
 const router = useRouter()
 const appConfig = inject('appConfig', {})

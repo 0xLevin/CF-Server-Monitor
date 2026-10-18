@@ -6,6 +6,7 @@ import { serveFrontend } from './handlers/frontend.js';
 import { handleUpdate, handleWebSocketUpgrade, handleUpdateWebSocketUpgrade } from './handlers/update.js';
 import { handleServerAPI, handleServersAPI } from './handlers/dashboard.js';
 import { handleTheme } from './handlers/theme.js';
+import { checkDueDomainMonitors, handleDomainMonitorRequest, handleDomainProbeRequest } from './domain-monitor/index.js';
 import { isValidThemeOptions, loadSettings, loadSiteSettings, loadAppearanceOptions, normalizeFrontendWsTimeoutMinutes, normalizeLongHistoryPoints, saveThemeOptions, setDebug, debug } from './utils/settings.js';
 import { omitNullLossProbeFields } from './handlers/dashboard.js';
 import { checkAuth, simpleAuthResponse } from './middleware/auth.js';
@@ -223,6 +224,8 @@ export default {
     const bypassTurnstilePaths = [
       '/admin/api',
       '/api/ws',
+      '/api/domain-probe/jobs',
+      '/api/domain-probe/results',
     ];
 
     const isApiRequest = path.startsWith('/api/') || path.startsWith('/admin/api');
@@ -278,6 +281,10 @@ export default {
     }
 
     const routes = [
+      { method: 'GET', path: '/api/domain-probe/jobs', handler: () => handleDomainProbeRequest(request, env) },
+      { method: 'POST', path: '/api/domain-probe/results', handler: () => handleDomainProbeRequest(request, env) },
+      { method: 'GET', path: '/api/admin/domains', handler: () => handleDomainMonitorRequest(request, env) },
+      { method: 'POST', path: '/api/admin/domains', handler: () => handleDomainMonitorRequest(request, env) },
       { method: 'POST', path: '/update', handler: () => handleUpdate(request, env, ctx) },
       { method: 'GET', path: '/update', handler: () => handleUpdateWebSocketUpgrade(request, env) },
       { method: 'GET', path: '/__do/health', handler: async () => {
@@ -430,6 +437,11 @@ export default {
       }}
     ];
 
+    if (path.startsWith('/api/admin/domains/')) {
+      const response = await handleDomainMonitorRequest(request, env);
+      return applyCors(response, request, corsAllowedOrigins);
+    }
+
     for (const route of routes) {
       if (route.method === method && route.path === path) {
         const response = await route.handler();
@@ -493,6 +505,7 @@ export default {
       }
       debug('[Cron] 检查是否到达服务器到期检测时间');
       await checkExpiringServers(env.DB, { scheduled: true, now: now.getTime() });
+      await checkDueDomainMonitors(env);
     }else if(env.DEBUG == 1){
       if (cron === '0 0 * * 0') {
         debug('[Cron DEBUG] 开始执行每周数据清理任务（表轮换）');
